@@ -1,0 +1,388 @@
+Mana, **bitta o‘yinli platformer sayt** tayyor. Kodni `index.html` nomi bilan saqlab, brauzerda oching. Kompyuterda **← →** yoki **A/D** bilan yuring, **Space/↑/W** bilan sakrang. Telefonda ekrandagi tugmalarni ishlating.
+
+```html name=index.html
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quvnoq Sarguzasht</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      color: #fff;
+      font-family: system-ui, sans-serif;
+      background: linear-gradient(135deg, #15143a, #263d70);
+    }
+    .game-wrap { width: min(100%, 960px); text-align: center; }
+    h1 { margin: 0 0 10px; font-size: clamp(24px, 5vw, 38px); }
+    .subtitle { margin: 0 0 14px; color: #d7e5ff; }
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 4px solid #fff;
+      border-radius: 16px;
+      background: #8bdcff;
+      box-shadow: 0 18px 55px #0006;
+    }
+    .help { margin: 12px 0; color: #d7e5ff; font-size: 14px; }
+    .mobile-controls {
+      display: none;
+      justify-content: center;
+      gap: 14px;
+      margin-top: 12px;
+      touch-action: none;
+    }
+    .mobile-controls button {
+      width: 70px;
+      height: 58px;
+      border: 0;
+      border-radius: 16px;
+      background: #ffffffdd;
+      color: #202b54;
+      font-size: 25px;
+      font-weight: 800;
+      box-shadow: 0 5px 0 #9eafd0;
+      touch-action: none;
+    }
+    .mobile-controls button:active {
+      transform: translateY(3px);
+      box-shadow: 0 2px 0 #9eafd0;
+    }
+    @media (pointer: coarse) { .mobile-controls { display: flex; } }
+  </style>
+</head>
+<body>
+  <main class="game-wrap">
+    <h1>🌟 Quvnoq Sarguzasht</h1>
+    <p class="subtitle">Tangalarni yig‘ing va marraga yetib boring!</p>
+    <canvas id="game" width="960" height="540" aria-label="Platformer o‘yini"></canvas>
+    <p class="help">Yurish: ← → yoki A/D · Sakrash: Space, ↑ yoki W · Qayta boshlash: R</p>
+    <div class="mobile-controls">
+      <button data-key="left" aria-label="Chapga">◀</button>
+      <button data-key="jump" aria-label="Sakrash">⬆</button>
+      <button data-key="right" aria-label="O‘ngga">▶</button>
+    </div>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    const WORLD_WIDTH = 2400;
+    const FLOOR_Y = 470;
+    const keys = { left: false, right: false };
+    let jumpPressed = false;
+    let cameraX = 0;
+    let score = 0;
+    let lives = 3;
+    let state = "playing";
+    let lastTime = 0;
+    let elapsed = 0;
+
+    const platforms = [
+      { x: 0, y: FLOOR_Y, w: 440, h: 100 },
+      { x: 560, y: FLOOR_Y, w: 430, h: 100 },
+      { x: 1100, y: FLOOR_Y, w: 420, h: 100 },
+      { x: 1640, y: FLOOR_Y, w: 760, h: 100 },
+
+      { x: 250, y: 380, w: 145, h: 18 },
+      { x: 470, y: 320, w: 130, h: 18 },
+      { x: 700, y: 390, w: 150, h: 18 },
+      { x: 900, y: 335, w: 135, h: 18 },
+      { x: 1120, y: 375, w: 145, h: 18 },
+      { x: 1350, y: 315, w: 150, h: 18 },
+      { x: 1570, y: 385, w: 140, h: 18 },
+      { x: 1790, y: 325, w: 150, h: 18 },
+      { x: 2010, y: 380, w: 145, h: 18 }
+    ];
+
+    const coins = [
+      { x: 300, y: 340, taken: false }, { x: 520, y: 280, taken: false },
+      { x: 745, y: 350, taken: false }, { x: 945, y: 295, taken: false },
+      { x: 1165, y: 335, taken: false }, { x: 1400, y: 275, taken: false },
+      { x: 1605, y: 345, taken: false }, { x: 1840, y: 285, taken: false },
+      { x: 2070, y: 340, taken: false }, { x: 2250, y: 420, taken: false }
+    ];
+
+    const player = {
+      x: 55, y: 400, w: 30, h: 42, vx: 0, vy: 0, grounded: false
+    };
+
+    function resetPlayer() {
+      player.x = 55;
+      player.y = 400;
+      player.vx = 0;
+      player.vy = 0;
+      player.grounded = false;
+      cameraX = 0;
+    }
+
+    function restartGame() {
+      score = 0;
+      lives = 3;
+      state = "playing";
+      coins.forEach(coin => coin.taken = false);
+      resetPlayer();
+    }
+
+    function overlaps(a, b) {
+      return a.x < b.x + b.w && a.x + a.w > b.x &&
+             a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+
+    function update(dt) {
+      if (state !== "playing") return;
+
+      const step = Math.min(dt / 16.67, 2);
+      elapsed += dt;
+
+      player.vx = 0;
+      if (keys.left) player.vx = -5.2;
+      if (keys.right) player.vx = 5.2;
+
+      if (jumpPressed && player.grounded) {
+        player.vy = -14;
+        player.grounded = false;
+      }
+      jumpPressed = false;
+
+      // Gorizontal harakat va platforma yonlariga urilish
+      player.x += player.vx * step;
+      for (const p of platforms) {
+        if (!overlaps(player, p)) continue;
+        if (player.vx > 0) player.x = p.x - player.w;
+        if (player.vx < 0) player.x = p.x + p.w;
+      }
+      player.x = Math.max(0, Math.min(WORLD_WIDTH - player.w, player.x));
+
+      // Sakrash va platformalarga qo‘nish
+      const oldBottom = player.y + player.h;
+      player.vy += 0.68 * step;
+      player.y += player.vy * step;
+      player.grounded = false;
+
+      if (player.vy >= 0) {
+        for (const p of platforms) {
+          const newBottom = player.y + player.h;
+          const horizontalOverlap = player.x + player.w > p.x && player.x < p.x + p.w;
+          if (horizontalOverlap && oldBottom <= p.y && newBottom >= p.y) {
+            player.y = p.y - player.h;
+            player.vy = 0;
+            player.grounded = true;
+          }
+        }
+      }
+
+      // Tanga yig‘ish
+      for (const coin of coins) {
+        if (coin.taken) continue;
+        const coinBox = { x: coin.x - 12, y: coin.y - 12, w: 24, h: 24 };
+        if (overlaps(player, coinBox)) {
+          coin.taken = true;
+          score += 10;
+        }
+      }
+
+      // Jarlikka tushish
+      if (player.y > 620) {
+        lives--;
+        if (lives <= 0) state = "gameover";
+        else resetPlayer();
+      }
+
+      if (player.x > 2260) state = "win";
+
+      cameraX = Math.max(0, Math.min(WORLD_WIDTH - canvas.width, player.x - 330));
+    }
+
+    function drawBackground() {
+      const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      sky.addColorStop(0, "#75d7ff");
+      sky.addColorStop(1, "#e1f8ff");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Uzoqdagi tepaliklar
+      ctx.fillStyle = "#75c9a0";
+      for (let i = 0; i < 7; i++) {
+        const x = i * 190 - (cameraX * 0.22 % 190);
+        ctx.beginPath();
+        ctx.moveTo(x - 80, 470);
+        ctx.quadraticCurveTo(x + 45, 300, x + 170, 470);
+        ctx.fill();
+      }
+
+      // Bulutlar
+      ctx.fillStyle = "#ffffffb8";
+      for (let i = 0; i < 8; i++) {
+        const x = (i * 180 - cameraX * 0.12 % 180 + 180) % 1080 - 50;
+        const y = 70 + (i % 3) * 55;
+        ctx.beginPath();
+        ctx.arc(x, y, 22, 0, Math.PI * 2);
+        ctx.arc(x + 25, y - 10, 28, 0, Math.PI * 2);
+        ctx.arc(x + 52, y, 20, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawPlatform(p) {
+      const x = p.x - cameraX;
+      if (x + p.w < -10 || x > canvas.width + 10) return;
+
+      ctx.fillStyle = p.y === FLOOR_Y ? "#8b5a35" : "#a86e3f";
+      ctx.fillRect(x, p.y, p.w, p.h);
+      ctx.fillStyle = "#48c774";
+      ctx.fillRect(x, p.y, p.w, 12);
+      ctx.fillStyle = "#35a95e";
+      for (let i = 0; i < p.w; i += 28) {
+        ctx.fillRect(x + i, p.y + 10, 14, 5);
+      }
+    }
+
+    function drawCoin(coin) {
+      if (coin.taken) return;
+      const x = coin.x - cameraX;
+      if (x < -30 || x > canvas.width + 30) return;
+
+      const wobble = Math.sin(elapsed / 180 + coin.x) * 3;
+      ctx.fillStyle = "#ffb800";
+      ctx.beginPath();
+      ctx.ellipse(x, coin.y + wobble, 11, 14, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#fff07a";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.fillStyle = "#fff5b0";
+      ctx.fillRect(x - 2, coin.y - 7 + wobble, 4, 14);
+    }
+
+    function drawPlayer() {
+      const x = player.x - cameraX;
+      ctx.fillStyle = "#253461";
+      ctx.fillRect(x + 3, player.y + 7, player.w - 6, player.h - 7);
+      ctx.fillStyle = "#ff5c69";
+      ctx.fillRect(x, player.y + 10, player.w, player.h - 10);
+      ctx.fillStyle = "#ffd1a3";
+      ctx.fillRect(x + 5, player.y, 20, 20);
+      ctx.fillStyle = "#26314e";
+      ctx.fillRect(x + 8, player.y + 7, 4, 5);
+      ctx.fillRect(x + 19, player.y + 7, 4, 5);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(x + 5, player.y + player.h - 5, 9, 5);
+      ctx.fillRect(x + 17, player.y + player.h - 5, 9, 5);
+    }
+
+    function drawGoal() {
+      const x = 2290 - cameraX;
+      ctx.fillStyle = "#68462d";
+      ctx.fillRect(x, 355, 10, 115);
+      ctx.fillStyle = "#ffdf4d";
+      ctx.beginPath();
+      ctx.moveTo(x + 10, 358);
+      ctx.lineTo(x + 65, 378);
+      ctx.lineTo(x + 10, 398);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 18px system-ui";
+      ctx.fillText("MARra", x + 11, 385);
+    }
+
+    function drawHud() {
+      ctx.fillStyle = "#14264ddd";
+      ctx.fillRect(18, 16, 215, 48);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 20px system-ui";
+      ctx.fillText(`🪙 ${score}     ❤️ ${lives}`, 32, 47);
+
+      ctx.fillStyle = "#14264ddd";
+      ctx.fillRect(750, 16, 190, 42);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 16px system-ui";
+      ctx.fillText("Quvnoq Sarguzasht", 764, 43);
+    }
+
+    function drawOverlay(title, message) {
+      ctx.fillStyle = "#101936b8";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 48px system-ui";
+      ctx.fillText(title, canvas.width / 2, 235);
+      ctx.font = "22px system-ui";
+      ctx.fillText(message, canvas.width / 2, 280);
+      ctx.font = "17px system-ui";
+      ctx.fillText("Qayta boshlash uchun R tugmasini bosing", canvas.width / 2, 325);
+      ctx.textAlign = "left";
+    }
+
+    function draw() {
+      drawBackground();
+      ctx.save();
+      ctx.translate(-cameraX, 0);
+      for (const p of platforms) drawPlatform(p);
+      ctx.restore();
+
+      for (const coin of coins) drawCoin(coin);
+      drawGoal();
+      drawPlayer();
+      drawHud();
+
+      if (state === "win") drawOverlay("G‘ALABA! 🎉", `Siz ${score} ochko to‘pladingiz!`);
+      if (state === "gameover") drawOverlay("O‘YIN TUGADI", `Jami ochko: ${score}`);
+    }
+
+    function loop(time) {
+      const dt = lastTime ? time - lastTime : 16.67;
+      lastTime = time;
+      update(dt);
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    function setKey(key, isDown) {
+      if (key === "ArrowLeft" || key.toLowerCase() === "a") keys.left = isDown;
+      if (key === "ArrowRight" || key.toLowerCase() === "d") keys.right = isDown;
+      if ([" ", "ArrowUp", "w", "W"].includes(key) && isDown) jumpPressed = true;
+      if (key.toLowerCase() === "r" && isDown) restartGame();
+    }
+
+    window.addEventListener("keydown", event => {
+      if (["ArrowLeft", "ArrowRight", "ArrowUp", " "].includes(event.key)) {
+        event.preventDefault();
+      }
+      setKey(event.key, true);
+    });
+    window.addEventListener("keyup", event => setKey(event.key, false));
+
+    document.querySelectorAll(".mobile-controls button").forEach(button => {
+      const action = button.dataset.key;
+      const down = event => {
+        event.preventDefault();
+        if (action === "left") keys.left = true;
+        if (action === "right") keys.right = true;
+        if (action === "jump") jumpPressed = true;
+      };
+      const up = event => {
+        event.preventDefault();
+        if (action === "left") keys.left = false;
+        if (action === "right") keys.right = false;
+      };
+      button.addEventListener("pointerdown", down);
+      button.addEventListener("pointerup", up);
+      button.addEventListener("pointerleave", up);
+      button.addEventListener("pointercancel", up);
+    });
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
+```
